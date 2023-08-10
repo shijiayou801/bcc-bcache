@@ -138,6 +138,13 @@ int entry___bch_keylist_realloc(
 }
 
 
+struct open_bucket {
+	struct list_head	list;
+	unsigned int		last_write_point;
+	unsigned int		sectors_free;
+	BKEY_PADDED(key);
+};
+
 struct bch_alloc_sectors_event_t {
 	u64			start_time;
 
@@ -150,12 +157,57 @@ struct bch_alloc_sectors_event_t {
 	u64			bkey_offset;
 
 	u16			bucket_size;
+
+	u8			nr_buckets;
 };
 BPF_PERF_OUTPUT(bch_alloc_sectors_event);
 
 
+static struct open_bucket *get_data(struct list_head *head)
+{
+	struct open_bucket *b;
 
-// sectors: the number of sectors user requested to write
+	void *__mptr = (void *)(head);
+	b = ((struct open_bucket *)(__mptr - offsetof(struct open_bucket, list)));
+
+	return b;
+}
+
+static struct open_bucket *last_entry(struct list_head *list_head)
+{
+	return get_data(list_head->prev);
+}
+
+static bool entry_is_head(
+		struct list_head *list_head,
+		struct open_bucket *b)
+{
+	return &b->list == list_head;
+}
+
+static struct open_bucket *prev_entry(struct open_bucket *b)
+{
+	return get_data(b->list.prev);
+}
+
+
+BPF_ARRAY(bucket_inode, u32, 128);
+
+/*
+ * Allocates some space in the cache to write to, and k to point to the newly
+ * allocated space, and updates KEY_SIZE(k) and KEY_OFFSET(k) (to point to the
+ * end of the newly allocated space).
+ *
+ * May allocate fewer sectors than @sectors, KEY_SIZE(k) indicates how many
+ * sectors were actually allocated.
+ *
+ * If s->writeback is true, will not fail.
+ */
+// param
+// @sectors: the number of sectors the user requested to write
+//
+//
+// 
 int entry_bch_alloc_sectors(
 		struct pt_regs *ctx,
 		struct cache_set *c,
@@ -165,6 +217,7 @@ int entry_bch_alloc_sectors(
 		unsigned int write_prio,
 		bool wait)
 {
+	struct open_bucket *b;
 	struct bch_alloc_sectors_event_t data = {};
 
 	data.start_time = bpf_ktime_get_boot_ns();
@@ -172,6 +225,7 @@ int entry_bch_alloc_sectors(
 	data.write_point = write_point;
 	data.write_prio = write_prio;
 	data.wait = wait;
+	data.nr_buckets = 0;
 
 	// TODO
 	data.bkey_inode = 
@@ -184,6 +238,20 @@ int entry_bch_alloc_sectors(
 	data.bkey_offset = k->low;
 
 	data.bucket_size = c->cache->sb.bucket_size;
+
+	// Reverse loop
+	b = last_entry(&c->data_buckets);
+	for (int i = 0; i < 128; ++i) {
+		++data.nr_buckets;
+
+		//u32 *val = bucket_inode.lookup(&i);
+		//lock_xadd(val, b->key);
+
+	     	b = prev_entry(b);
+		if (entry_is_head(&c->data_buckets, b)) {
+			break;
+		}
+	}
 
 	bch_alloc_sectors_event.perf_submit(ctx, &data, sizeof(data));
 	return 0;
@@ -241,10 +309,65 @@ int entry__bch_bucket_alloc_set(
 		struct cache_set *c, unsigned int reserve,
 		struct bkey *k, bool wait)
 {
-	struct bch_bucket_alloc_set_t data;
+	struct bch_bucket_alloc_set_t data = {};
 
 	data.start_time = bpf_ktime_get_boot_ns();
 
 	bch_bucket_alloc_set_event.perf_submit(ctx, &data, sizeof(data));
+	return 0;
+}
+
+
+
+struct bch_data_insert_keys_event_t {
+	u64			start_time;
+
+	u16			flags;
+};
+BPF_PERF_OUTPUT(bch_data_insert_keys_event);
+
+int entry_bch_data_insert_keys(
+		struct pt_regs *ctx,
+		struct closure *cl)
+{
+	struct bch_data_insert_keys_event_t data = {};
+	struct data_insert_op *op;
+
+	
+	void *__mptr = (void *)(cl);
+	op = (struct data_insert_op *)
+		(__mptr - offsetof(struct data_insert_op, cl));
+
+	data.start_time = bpf_ktime_get_boot_ns();
+	data.flags = op->flags;
+
+	bch_data_insert_keys_event.perf_submit(ctx, &data, sizeof(data));
+	return 0;
+}
+
+
+struct __bch_submit_bbio_event_t {
+	u64			start_time;
+
+	u16			flags;
+};
+BPF_PERF_OUTPUT(__bch_submit_bbio_event);
+
+int entry___bch_submit_bbio(
+		struct pt_regs *ctx,
+		struct bio *bio, 
+		struct cache_set *c)
+{
+	struct __bch_submit_bbio_event_t data = {};
+	struct data_insert_op *op;
+
+	if ((bio->bi_opf & REQ_OP_MASK) != REQ_OP_WRITE) {
+		return 0;
+	}
+
+	data.start_time = bpf_ktime_get_boot_ns();
+	data.flags = op->flags;
+
+	__bch_submit_bbio_event.perf_submit(ctx, &data, sizeof(data));
 	return 0;
 }
