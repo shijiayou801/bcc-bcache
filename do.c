@@ -4,11 +4,11 @@
 #include <linux/container_of.h>
 
 
-#include "/home/jyshi/linux-5.19/drivers/md/bcache/bcache.h"
-#include "/home/jyshi/linux-5.19/drivers/md/bcache/bset.h"
-#include "/home/jyshi/linux-5.19/drivers/md/bcache/btree.h"
-#include "/home/jyshi/linux-5.19/drivers/md/bcache/closure.h"
-#include "/home/jyshi/linux-5.19/drivers/md/bcache/request.h"
+#include "../linux-5.19/drivers/md/bcache/bcache.h"
+#include "../linux-5.19/drivers/md/bcache/bset.h"
+#include "../linux-5.19/drivers/md/bcache/btree.h"
+#include "../linux-5.19/drivers/md/bcache/closure.h"
+#include "../linux-5.19/drivers/md/bcache/request.h"
 
 
 struct search {
@@ -34,7 +34,7 @@ struct search {
 };
 
 struct bch_data_insert_event_t {
-	u64			start_time;
+	u64             start_time;
 
 	s64 			remaining;
 };
@@ -148,6 +148,8 @@ struct bch_alloc_sectors_event_t {
 
 	unsigned int 		bkey_inode;
 	u64			bkey_offset;
+
+	u16			bucket_size;
 };
 BPF_PERF_OUTPUT(bch_alloc_sectors_event);
 
@@ -180,6 +182,8 @@ int entry_bch_alloc_sectors(
 	// then Bkey's offset is at [dc->sb.data_offset] + 10
 	// data_offset is printed to be 16
 	data.bkey_offset = k->low;
+
+	data.bucket_size = c->cache->sb.bucket_size;
 
 	bch_alloc_sectors_event.perf_submit(ctx, &data, sizeof(data));
 	return 0;
@@ -222,5 +226,25 @@ int entry_cached_dev_submit_bio(
 	data.bcache_device_inode = d->id;
 
 	cached_dev_submit_bio_event.perf_submit(ctx, &data, sizeof(data));
+	return 0;
+}
+
+
+
+struct bch_bucket_alloc_set_t {
+	u64			start_time;
+};
+BPF_PERF_OUTPUT(bch_bucket_alloc_set_event);
+
+int entry__bch_bucket_alloc_set(
+		struct pt_regs *ctx,
+		struct cache_set *c, unsigned int reserve,
+		struct bkey *k, bool wait)
+{
+	struct bch_bucket_alloc_set_t data;
+
+	data.start_time = bpf_ktime_get_boot_ns();
+
+	bch_bucket_alloc_set_event.perf_submit(ctx, &data, sizeof(data));
 	return 0;
 }

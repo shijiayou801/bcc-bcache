@@ -17,6 +17,8 @@ b.attach_kprobe(event="cached_dev_write", fn_name="entry_cached_dev_write")
 b.attach_kprobe(event="__bch_keylist_realloc", fn_name="entry___bch_keylist_realloc")
 b.attach_kprobe(event="bch_alloc_sectors", fn_name="entry_bch_alloc_sectors")
 b.attach_kprobe(event="cached_dev_submit_bio", fn_name="entry_cached_dev_submit_bio")
+b.attach_kprobe(event="__bch_bucket_alloc_set", fn_name="entry__bch_bucket_alloc_set")
+
 
 
 def print_bch_data_insert(cpu, data, size):
@@ -66,6 +68,7 @@ def print_bch_alloc_sectors(cpu, data, size):
     print("wait ", event.wait)
     print("bkey_inode ", event.bkey_inode)
     print("bkey_offset ", event.bkey_offset)
+    print("bucket_size %dKB" % (event.bucket_size * 512.0 / 1024))
     print("\n")
 
 def print_cached_dev_submit_bio(cpu, data, size):
@@ -80,12 +83,24 @@ def print_cached_dev_submit_bio(cpu, data, size):
     print("\n")
 
 
+def print_bch_bucket_alloc_set(cpu, data, size):
+    event = b["bch_bucket_alloc_set_event"].event(data)
+
+    print("\n")
+    print("bch_data_bucket_alloc_set")
+    print("time ", event.start_time / (1e6))
+    print("\n")
+
+
+
+
 b["cached_dev_submit_bio_event"].open_perf_buffer(print_cached_dev_submit_bio)
 b["cached_dev_write_event"].open_perf_buffer(print_cached_dev_write)
 b["bch_data_insert_event"].open_perf_buffer(print_bch_data_insert)
 b["bch_data_insert_start_event"].open_perf_buffer(print_bch_data_insert_start)
 b["bch_keylist_realloc_event"].open_perf_buffer(print_bch_keylist_realloc)
 b["bch_alloc_sectors_event"].open_perf_buffer(print_bch_alloc_sectors)
+b["bch_bucket_alloc_set_event"].open_perf_buffer(print_bch_bucket_alloc_set)
 
 
 # format output
