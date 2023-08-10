@@ -345,11 +345,19 @@ int entry_bch_data_insert_keys(
 	return 0;
 }
 
+static u64 X_PTR_OFFSET(const struct bkey *k, unsigned int i)
+{ 
+	const u64 *v = &k->ptr[i];
+	return ((*v) >> 8) & ~(~0ULL << 43);
+}
 
 struct __bch_submit_bbio_event_t {
 	u64			start_time;
 
 	u16			flags;
+	u64			bkey_offset;
+	u32			bi_size;
+	u64			bio_addr;
 };
 BPF_PERF_OUTPUT(__bch_submit_bbio_event);
 
@@ -359,15 +367,49 @@ int entry___bch_submit_bbio(
 		struct cache_set *c)
 {
 	struct __bch_submit_bbio_event_t data = {};
-	struct data_insert_op *op;
+	struct bbio *b;
+
+	void *__mptr = (void *)(bio);
+	b = (struct bbio *)
+		(__mptr - offsetof(struct bbio, bio));
 
 	if ((bio->bi_opf & REQ_OP_MASK) != REQ_OP_WRITE) {
 		return 0;
 	}
 
 	data.start_time = bpf_ktime_get_boot_ns();
-	data.flags = op->flags;
+	data.bkey_offset = X_PTR_OFFSET(&b->key, 0);
+	data.bi_size = bio->bi_iter.bi_size;
+	data.bio_addr = (u64)bio;
 
 	__bch_submit_bbio_event.perf_submit(ctx, &data, sizeof(data));
+	return 0;
+}
+
+struct submit_bio_noacct_event_t {
+	u64			start_time;
+
+	u64			bi_sector;
+	u32			bi_size;
+	u64			bio_addr;
+};
+BPF_PERF_OUTPUT(submit_bio_noacct_event);
+
+int entry_submit_bio_noacct(
+		struct pt_regs *ctx,
+		struct bio *bio)
+{
+	struct submit_bio_noacct_event_t data = {};
+
+	if ((bio->bi_opf & REQ_OP_MASK) != REQ_OP_WRITE) {
+		return 0;
+	}
+
+	data.start_time = bpf_ktime_get_boot_ns();
+	data.bi_sector = bio->bi_iter.bi_sector;
+	data.bi_size = bio->bi_iter.bi_size;
+	data.bio_addr = (u64)bio;
+
+	submit_bio_noacct_event.perf_submit(ctx, &data, sizeof(data));
 	return 0;
 }

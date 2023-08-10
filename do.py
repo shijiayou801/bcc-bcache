@@ -29,6 +29,8 @@ b.attach_kprobe(event="bch_data_insert_keys",
                 fn_name="entry_bch_data_insert_keys")
 b.attach_kprobe(event="__bch_submit_bbio",
                 fn_name="entry___bch_submit_bbio")
+b.attach_kprobe(event="submit_bio_noacct",
+                fn_name="entry_submit_bio_noacct")
 
 
 def print_bch_data_insert(cpu, data, size):
@@ -115,8 +117,22 @@ def print___bch_submit_bbio_event(cpu, data, size):
 
     print("__bch_submit_bbio")
     print("time ", event.start_time / (1e6))
+    print("bkey_offset", event.bkey_offset)
+    print("bi_size", event.bi_size)
+    print("bio_addr ", hex(event.bio_addr))
     print("\n")
 
+
+def print_submit_bio_noacct(cpu, data, size):
+    event = b["submit_bio_noacct_event"].event(data)
+
+    """
+    print("submit_bio_noacct")
+    print("time ", event.start_time / (1e6))
+    print("bi_sector ", event.bi_sector)
+    print("bi_size ", event.bi_size)
+    print("bio_addr ", hex(event.bio_addr))
+    print("\n")"""
 
 b["cached_dev_submit_bio_event"].open_perf_buffer(print_cached_dev_submit_bio)
 b["cached_dev_write_event"].open_perf_buffer(print_cached_dev_write)
@@ -127,6 +143,10 @@ b["bch_alloc_sectors_event"].open_perf_buffer(print_bch_alloc_sectors)
 b["bch_bucket_alloc_set_event"].open_perf_buffer(print_bch_bucket_alloc_set)
 b["bch_data_insert_keys_event"].open_perf_buffer(print_bch_data_insert_keys)
 b["__bch_submit_bbio_event"].open_perf_buffer(print___bch_submit_bbio_event)
+b["submit_bio_noacct_event"].open_perf_buffer(print_submit_bio_noacct)
+
+
+
 
 # format output
 start = 0
