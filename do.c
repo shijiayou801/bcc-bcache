@@ -34,8 +34,9 @@ struct search {
 };
 
 struct bch_data_insert_event_t {
+	u64			start_time;
+
 	s64 			remaining;
-	u16              	flags;
 };
 BPF_PERF_OUTPUT(bch_data_insert_event);
 
@@ -45,7 +46,9 @@ int entry_bch_data_insert(
 	struct closure *cl) 
 {
     	struct bch_data_insert_event_t data = {};
+	struct data_insert_op *op;
 
+	data.start_time = bpf_ktime_get_boot_ns();
     	data.remaining = cl->remaining.counter;
 
     	bch_data_insert_event.perf_submit(ctx, &data, sizeof(data));
@@ -55,8 +58,12 @@ int entry_bch_data_insert(
 
 
 struct bch_data_insert_start_event_t {
+	u64			start_time;
+
+	u16			flags;
+
 	// Bio
-	unsigned int		inode;
+	unsigned int		inode;	 // The inode of the device
 	unsigned int		bi_size;
 	unsigned int		bi_opf;
 };
@@ -64,7 +71,7 @@ BPF_PERF_OUTPUT(bch_data_insert_start_event);
 
 int entry_bch_data_insert_start(
 	struct pt_regs *ctx,
-	struct closure *cl) 
+	struct closure *cl)
 {
 	struct bch_data_insert_start_event_t data = {};
 	struct data_insert_op *op;
@@ -73,21 +80,26 @@ int entry_bch_data_insert_start(
 	op = (struct data_insert_op *)
 		(__mptr - offsetof(struct data_insert_op, cl));
 
+	data.start_time = bpf_ktime_get_boot_ns();
+
 	data.inode = op->inode;
 	data.bi_size = op->bio->bi_iter.bi_size;
 	data.bi_opf = op->bio->bi_opf;
+
+	data.flags = op->flags;
 
 	bch_data_insert_start_event.perf_submit(ctx, &data, sizeof(data));
 	return 0;
 }
 
 struct cached_dev_write_event_t {
-
+	u64			start_time;
+	int			has_dirty;
 };
 BPF_PERF_OUTPUT(cached_dev_write_event);
 
 int entry_cached_dev_write(
-    	struct pt_regs *ctx,
+	struct pt_regs *ctx,
     	struct cached_dev *dc,
     	struct search *s)
 {
@@ -97,7 +109,118 @@ int entry_cached_dev_write(
 	struct bkey start = KEY(dc->disk.id, bio->bi_iter.bi_sector, 0);
 	struct bkey end = KEY(dc->disk.id, bio_end_sector(bio), 0);
 
+	data.start_time = bpf_ktime_get_boot_ns();
+	data.has_dirty = dc->has_dirty.counter;
 
 	cached_dev_write_event.perf_submit(ctx, &data, sizeof(data));
+	return 0;
+}
+
+struct bch_keylist_realloc_event_t {
+	u64			start_time;
+
+	u64			u64s;
+};
+BPF_PERF_OUTPUT(bch_keylist_realloc_event);
+
+int entry___bch_keylist_realloc(
+	struct pt_regs *ctx,
+	struct keylist *l,
+	unsigned int u64s)
+{
+	struct bch_keylist_realloc_event_t data = {};
+
+	data.start_time = bpf_ktime_get_boot_ns();
+	data.u64s = u64s;
+
+	bch_keylist_realloc_event.perf_submit(ctx, &data, sizeof(data));
+	return 0;
+}
+
+
+struct bch_alloc_sectors_event_t {
+	u64			start_time;
+
+	unsigned int 		sectors;
+	unsigned int 		write_point;
+	unsigned int 		write_prio;
+	unsigned int 		wait;
+
+	unsigned int 		bkey_inode;
+	u64			bkey_offset;
+};
+BPF_PERF_OUTPUT(bch_alloc_sectors_event);
+
+
+
+// sectors: the number of sectors user requested to write
+int entry_bch_alloc_sectors(
+		struct pt_regs *ctx,
+		struct cache_set *c,
+		struct bkey *k,
+		unsigned int sectors,
+		unsigned int write_point,
+		unsigned int write_prio,
+		bool wait)
+{
+	struct bch_alloc_sectors_event_t data = {};
+
+	data.start_time = bpf_ktime_get_boot_ns();
+	data.sectors = sectors;
+	data.write_point = write_point;
+	data.write_prio = write_prio;
+	data.wait = wait;
+
+	// TODO
+	data.bkey_inode = 
+		((k->high >> 0) & ~(~0ULL << 20));
+
+	// The Bkey's offset is [dc->sb.data_offset] + user's sector's offset
+	// If user writes at offset 10 * 512,
+	// then Bkey's offset is at [dc->sb.data_offset] + 10
+	// data_offset is printed to be 16
+	data.bkey_offset = k->low;
+
+	bch_alloc_sectors_event.perf_submit(ctx, &data, sizeof(data));
+	return 0;
+}
+
+
+
+struct cached_dev_submit_bio_event_t {
+	u64			start_time;
+
+	u32			bio_opf;
+
+	
+	u64			cached_dev_data_offset;
+	u32			bcache_device_inode;
+};
+BPF_PERF_OUTPUT(cached_dev_submit_bio_event);
+
+int entry_cached_dev_submit_bio(
+		struct pt_regs *ctx,
+		struct bio *bio)
+{
+	struct cached_dev_submit_bio_event_t data = {};
+	struct block_device *orig_bdev = bio->bi_bdev;
+	struct bcache_device *d = orig_bdev->bd_disk->private_data;
+	struct cached_dev *dc;
+
+	void *__mptr = (void *)(d);
+	dc = (struct cached_dev *)
+		(__mptr - offsetof(struct cached_dev, disk));
+
+	// Right now, we are only interested in write requests
+	if ((bio->bi_opf & REQ_OP_MASK) != REQ_OP_WRITE) {
+		return 0;
+	}
+
+	data.start_time = bpf_ktime_get_boot_ns();
+	data.bio_opf = bio->bi_opf;
+	data.cached_dev_data_offset = dc->sb.data_offset;
+	data.bcache_device_inode = d->id;
+
+	cached_dev_submit_bio_event.perf_submit(ctx, &data, sizeof(data));
 	return 0;
 }
