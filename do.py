@@ -14,18 +14,36 @@ b.attach_kprobe(event="cached_dev_write", fn_name="entry_cached_dev_write")
 
 ###bch_writeback_add
 
-def print_events(cpu, data, size):
-    event = b["events"].event(data)
+def print_bch_data_insert(cpu, data, size):
+    event = b["bch_data_insert_event"].event(data)
 
-    print("%s " % (event.comm))
-    print(bin(event.remaining))
-    print(event.inode)
-    print(event.bi_size)
-    print(bin(event.bi_opf))
+    print("bch_data_insert")
+    print("remaining ", bin(event.remaining))
     print("flags:", bin(event.flags))
     print("\n")
 
-b["events"].open_perf_buffer(print_events)
+
+def print_bch_data_insert_start(cpu, data, size):
+    event = b["bch_data_insert_start_event"].event(data)
+
+    print("bch_data_insert_start")
+    print("inode ", event.inode)
+    print("bi_size ", event.bi_size)
+    print("bi_opf", event.bi_opf)
+    print("\n")
+
+def print_cached_dev_write(cpu, data, size):
+    event = b["cached_dev_write_event"].event(data)
+
+    print("cached_dev_write")
+    print("\n")
+
+
+b["bch_data_insert_event"].open_perf_buffer(print_bch_data_insert)
+b["bch_data_insert_start_event"].open_perf_buffer(print_bch_data_insert_start)
+b["cached_dev_write_event"].open_perf_buffer(print_cached_dev_write)
+
+
 
 # format output
 start = 0

@@ -33,79 +33,71 @@ struct search {
 	struct data_insert_op	iop;
 };
 
-
-struct data_t {
-    char comm[16];
-
-    // Closure
-    s64 remaining;
-
-    // Bio
-    unsigned int		inode;
-    unsigned int        bi_size;
-    unsigned int        bi_opf;
-
-    // Search
-    //     data_insert_op
-    u16              flags;
+struct bch_data_insert_event_t {
+	s64 			remaining;
+	u16              	flags;
 };
-BPF_PERF_OUTPUT(events);
+BPF_PERF_OUTPUT(bch_data_insert_event);
 
 
 int entry_bch_data_insert(
-    struct pt_regs *ctx,
-    struct closure *cl) 
+	struct pt_regs *ctx,
+	struct closure *cl) 
 {
-    struct data_t data = {};
+    	struct bch_data_insert_event_t data = {};
 
-    bpf_get_current_comm(&data.comm, sizeof(data.comm));
+    	data.remaining = cl->remaining.counter;
 
-    data.remaining = cl->remaining.counter;
-
-    events.perf_submit(ctx, &data, sizeof(data));
-
-    return 0;
+    	bch_data_insert_event.perf_submit(ctx, &data, sizeof(data));
+    	return 0;
 }
+
+
+
+struct bch_data_insert_start_event_t {
+	// Bio
+	unsigned int		inode;
+	unsigned int		bi_size;
+	unsigned int		bi_opf;
+};
+BPF_PERF_OUTPUT(bch_data_insert_start_event);
 
 int entry_bch_data_insert_start(
-    struct pt_regs *ctx,
-    struct closure *cl) 
+	struct pt_regs *ctx,
+	struct closure *cl) 
 {
-    struct data_insert_op *op;
+	struct bch_data_insert_start_event_t data = {};
+	struct data_insert_op *op;
 
-    void *__mptr = (void *)(cl);
+	void *__mptr = (void *)(cl);
+	op = (struct data_insert_op *)
+		(__mptr - offsetof(struct data_insert_op, cl));
 
-	op = (struct data_insert_op *)(__mptr - offsetof(struct data_insert_op, cl));
+	data.inode = op->inode;
+	data.bi_size = op->bio->bi_iter.bi_size;
+	data.bi_opf = op->bio->bi_opf;
 
-    struct data_t data = {};
-
-    data.remaining = cl->remaining.counter;
-    data.inode = op->inode;
-    data.bi_size = op->bio->bi_iter.bi_size;
-    data.bi_opf = op->bio->bi_opf;
-
-    events.perf_submit(ctx, &data, sizeof(data));
-
-    return 0;
+	bch_data_insert_start_event.perf_submit(ctx, &data, sizeof(data));
+	return 0;
 }
 
+struct cached_dev_write_event_t {
+
+};
+BPF_PERF_OUTPUT(cached_dev_write_event);
 
 int entry_cached_dev_write(
-    struct pt_regs *ctx,
-    struct cached_dev *dc,
-    struct search *s)
+    	struct pt_regs *ctx,
+    	struct cached_dev *dc,
+    	struct search *s)
 {
-
-    struct closure *cl = &s->cl;
+	struct cached_dev_write_event_t data = {};
+ 	struct closure *cl = &s->cl;
 	struct bio *bio = &s->bio.bio;
 	struct bkey start = KEY(dc->disk.id, bio->bi_iter.bi_sector, 0);
 	struct bkey end = KEY(dc->disk.id, bio_end_sector(bio), 0);
 
-    struct data_t data = {};
 
-    data.flags = s->iop.flags;
-
-    events.perf_submit(ctx, &data, sizeof(data));
-
-    return 0;
+	cached_dev_write_event.perf_submit(ctx, &data, sizeof(data));
+	return 0;
 }
