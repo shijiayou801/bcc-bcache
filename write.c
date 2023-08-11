@@ -66,6 +66,7 @@ struct bch_data_insert_start_event_t {
 	unsigned int		inode;	 // The inode of the device
 	unsigned int		bi_size;
 	unsigned int		bi_opf;
+	unsigned int 		bi_sector;
 };
 BPF_PERF_OUTPUT(bch_data_insert_start_event);
 
@@ -83,6 +84,7 @@ int entry_bch_data_insert_start(
 	data.start_time = bpf_ktime_get_boot_ns();
 
 	data.inode = op->inode;
+	data.bi_sector = op->bio->bi_iter.bi_sector;
 	data.bi_size = op->bio->bi_iter.bi_size;
 	data.bi_opf = op->bio->bi_opf;
 
@@ -145,24 +147,6 @@ struct open_bucket {
 	BKEY_PADDED(key);
 };
 
-struct bch_alloc_sectors_event_t {
-	u64			start_time;
-
-	unsigned int 		sectors;
-	unsigned int 		write_point;
-	unsigned int 		write_prio;
-	unsigned int 		wait;
-
-	unsigned int 		bkey_inode;
-	u64			bkey_offset;
-
-	u16			bucket_size;
-
-	u8			nr_buckets;
-};
-BPF_PERF_OUTPUT(bch_alloc_sectors_event);
-
-
 static struct open_bucket *get_data(struct list_head *head)
 {
 	struct open_bucket *b;
@@ -193,6 +177,26 @@ static struct open_bucket *prev_entry(struct open_bucket *b)
 
 BPF_ARRAY(bucket_inode, u32, 128);
 
+
+struct bch_alloc_sectors_event_t {
+	u64			start_time;
+
+	unsigned int 		sectors;
+	unsigned int 		write_point;
+	unsigned int 		write_prio;
+	unsigned int 		wait;
+
+	unsigned int 		bkey_inode;
+
+	u16			bucket_size;
+
+	u8			nr_buckets;
+
+	u64			bkey_ptrs;
+
+};
+BPF_PERF_OUTPUT(bch_alloc_sectors_event);
+
 /*
  * Allocates some space in the cache to write to, and k to point to the newly
  * allocated space, and updates KEY_SIZE(k) and KEY_OFFSET(k) (to point to the
@@ -206,8 +210,6 @@ BPF_ARRAY(bucket_inode, u32, 128);
 // param
 // @sectors: the number of sectors the user requested to write
 //
-//
-// 
 int entry_bch_alloc_sectors(
 		struct pt_regs *ctx,
 		struct cache_set *c,
@@ -231,22 +233,13 @@ int entry_bch_alloc_sectors(
 	data.bkey_inode = 
 		((k->high >> 0) & ~(~0ULL << 20));
 
-	// The Bkey's offset is [dc->sb.data_offset] + user's sector's offset
-	// If user writes at offset 10 * 512,
-	// then Bkey's offset is at [dc->sb.data_offset] + 10
-	// data_offset is printed to be 16
-	data.bkey_offset = k->low;
-
 	data.bucket_size = c->cache->sb.bucket_size;
 
 	// Reverse loop
 	b = last_entry(&c->data_buckets);
+
 	for (int i = 0; i < 128; ++i) {
 		++data.nr_buckets;
-
-		//u32 *val = bucket_inode.lookup(&i);
-		//lock_xadd(val, b->key);
-
 	     	b = prev_entry(b);
 		if (entry_is_head(&c->data_buckets, b)) {
 			break;
@@ -351,11 +344,17 @@ static u64 X_PTR_OFFSET(const struct bkey *k, unsigned int i)
 	return ((*v) >> 8) & ~(~0ULL << 43);
 }
 
+static u64 X_PTR_GEN(const struct bkey *k, unsigned int i)
+{ 
+	const u64 *v = &k->ptr[i];
+	return ((*v) >> 0) & ~(~0ULL << 8);
+}
+
 struct __bch_submit_bbio_event_t {
 	u64			start_time;
 
 	u16			flags;
-	u64			bkey_offset;
+	u64			lba_on_cache_device;
 	u32			bi_size;
 	u64			bio_addr;
 };
@@ -378,7 +377,7 @@ int entry___bch_submit_bbio(
 	}
 
 	data.start_time = bpf_ktime_get_boot_ns();
-	data.bkey_offset = X_PTR_OFFSET(&b->key, 0);
+	data.lba_on_cache_device = X_PTR_OFFSET(&b->key, 0);
 	data.bi_size = bio->bi_iter.bi_size;
 	data.bio_addr = (u64)bio;
 
@@ -411,5 +410,168 @@ int entry_submit_bio_noacct(
 	data.bio_addr = (u64)bio;
 
 	submit_bio_noacct_event.perf_submit(ctx, &data, sizeof(data));
+	return 0;
+}
+
+
+
+struct bch_submit_bbio_event_t {
+	u64			start_time;
+
+	u64			bkey_ptrs;
+	u64			bkey_dirty;
+	u64			bkey_size;
+	u64			inode_on_backing_device;
+	u64			lba_on_backing_device;
+	u64			lba_on_cache_device;
+	u64			bucket_gen;
+};
+BPF_PERF_OUTPUT(bch_submit_bbio_event);
+
+int entry_bch_submit_bbio(
+		struct pt_regs *ctx,
+		struct bio *bio, struct cache_set *c,
+		struct bkey *k, unsigned int ptr)
+{
+	struct bch_submit_bbio_event_t data = {};
+	struct bbio *b;
+
+	void *__mptr = (void *)(bio);
+	b = (struct bbio *)(__mptr - offsetof(struct bbio, bio));
+
+	if ((bio->bi_opf & REQ_OP_MASK) != REQ_OP_WRITE) {
+		return 0;
+	}
+
+	data.start_time = bpf_ktime_get_boot_ns();
+
+	data.bkey_ptrs = (k->high >> 60) & ~(~0ULL << 3);
+	data.bkey_dirty = (k->high >> 36) & ~(~0ULL << 1);
+	data.bkey_size = (k->high >> 20) & ~(~0ULL << 16);
+	data.inode_on_backing_device = (k->high >> 0) & ~(~0ULL << 20);
+
+	data.lba_on_backing_device = k->low;
+	data.lba_on_cache_device = X_PTR_OFFSET(k, 0);
+	data.bucket_gen = X_PTR_GEN(k, 0);
+
+	bch_submit_bbio_event.perf_submit(ctx, &data, sizeof(data));
+	return 0;
+}
+
+
+
+
+struct cached_dev_write_complete_event_t {
+	u64			start_time;
+
+};
+BPF_PERF_OUTPUT(cached_dev_write_complete_event);
+
+int entry_cached_dev_write_complete(
+		struct pt_regs *ctx,
+		struct bio *bio, struct cache_set *c,
+		struct bkey *k, unsigned int ptr)
+{
+	struct cached_dev_write_complete_event_t data = {};
+
+	data.start_time = bpf_ktime_get_boot_ns();
+
+	cached_dev_write_complete_event.perf_submit(ctx, &data, sizeof(data));
+	return 0;
+}
+
+
+
+
+struct bch_data_insert_endio_event_t {
+	u64			start_time;
+
+};
+BPF_PERF_OUTPUT(bch_data_insert_endio_event);
+
+int entry_bch_data_insert_endio(
+		struct pt_regs *ctx,
+		struct bio *bio, struct cache_set *c,
+		struct bkey *k, unsigned int ptr)
+{
+	struct bch_data_insert_endio_event_t data = {};
+
+	data.start_time = bpf_ktime_get_boot_ns();
+
+	bch_data_insert_endio_event.perf_submit(ctx, &data, sizeof(data));
+	return 0;
+}
+
+
+
+
+
+struct write_dirty_event_t {
+	u64			start_time;
+
+};
+BPF_PERF_OUTPUT(write_dirty_event);
+
+int entry_write_dirty(
+		struct pt_regs *ctx,
+		struct closure *cl)
+{
+	struct write_dirty_event_t data = {};
+
+	data.start_time = bpf_ktime_get_boot_ns();
+
+	write_dirty_event.perf_submit(ctx, &data, sizeof(data));
+	return 0;
+}
+
+
+
+struct bch_journal_event_t {
+	u64			start_time;
+
+	u64			keylist_keys_p;
+	u64			keylist_top_p;
+	u64			inline_keys;
+};
+BPF_PERF_OUTPUT(bch_journal_event);
+
+int entry_bch_journal(
+		struct pt_regs *ctx,
+		struct cache_set *c,
+		struct keylist *keys,
+		struct closure *parent)
+{
+	struct bch_journal_event_t data = {};
+
+	data.start_time = bpf_ktime_get_boot_ns();
+
+	data.keylist_keys_p = (u64)keys->keys_p;
+	
+	data.keylist_top_p = (u64)keys->top_p;
+
+	data.inline_keys = (u64)&keys->inline_keys;
+
+	bch_journal_event.perf_submit(ctx, &data, sizeof(data));
+	return 0;
+}
+
+struct journal_wait_for_write_event_t {
+	u64			start_time;
+	u32			nkeys;
+
+};
+BPF_PERF_OUTPUT(journal_wait_for_write_event);
+
+int entry_journal_wait_for_write(
+		struct pt_regs *ctx,
+		struct cache_set *c,
+		unsigned int nkeys)
+{
+	struct journal_wait_for_write_event_t data = {};
+
+	data.start_time = bpf_ktime_get_boot_ns();
+	data.nkeys = nkeys;
+
+	journal_wait_for_write_event.perf_submit(ctx, &data, sizeof(data));
 	return 0;
 }
