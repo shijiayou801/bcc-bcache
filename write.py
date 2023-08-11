@@ -4,7 +4,7 @@ from bcc.utils import printb
 import time
 from datetime import datetime
 
-program = "do.c"
+program = "write.c"
 
 # load BPF program
 b = BPF(src_file = program)
@@ -43,6 +43,12 @@ b.attach_kprobe(event="bch_journal",
                 fn_name="entry_bch_journal")
 b.attach_kprobe(event="journal_wait_for_write",
                 fn_name="entry_journal_wait_for_write")
+b.attach_kprobe(event="bch_btree_insert",
+                fn_name="entry_bch_btree_insert")
+b.attach_kprobe(event="journal_try_write",
+                fn_name="entry_journal_try_write")
+b.attach_kprobe(event="journal_write_unlocked",
+                fn_name="entry_journal_write_unlocked")
 
 
 
@@ -205,6 +211,32 @@ def print_journal_wait_for_write(cpu, data, size):
     print("nkeys ", event.nkeys)
     print("\n")
 
+
+def print_bch_btree_insert(cpu, data, size):
+    event = b["bch_btree_insert_event"].event(data)
+
+    print("bch_btree_insert")
+    print("time ", event.start_time / (1e6))
+    print("\n")
+
+
+def print_journal_try_write(cpu, data, size):
+    event = b["journal_try_write_event"].event(data)
+
+    print("journal_try_write")
+    print("time ", event.start_time / (1e6))
+    print("\n")
+
+
+def print_journal_write_unlocked(cpu, data, size):
+    event = b["journal_write_unlocked_event"].event(data)
+
+    print("journal_write_unlocked")
+    print("time ", event.start_time / (1e6))
+    print("need_write ", event.need_write)
+    print("\n")
+
+
 b["cached_dev_submit_bio_event"].open_perf_buffer(print_cached_dev_submit_bio)
 b["cached_dev_write_event"].open_perf_buffer(print_cached_dev_write)
 b["bch_data_insert_event"].open_perf_buffer(print_bch_data_insert)
@@ -221,6 +253,9 @@ b["bch_data_insert_endio_event"].open_perf_buffer(print_bch_data_insert_endio)
 b["write_dirty_event"].open_perf_buffer(print_write_dirty)
 b["bch_journal_event"].open_perf_buffer(print_bch_journal)
 b["journal_wait_for_write_event"].open_perf_buffer(print_journal_wait_for_write)
+b["bch_btree_insert_event"].open_perf_buffer(print_bch_btree_insert)
+b["journal_try_write_event"].open_perf_buffer(print_journal_try_write)
+b["journal_write_unlocked_event"].open_perf_buffer(print_journal_write_unlocked)
 
 # format output
 start = 0

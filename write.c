@@ -575,3 +575,77 @@ int entry_journal_wait_for_write(
 	journal_wait_for_write_event.perf_submit(ctx, &data, sizeof(data));
 	return 0;
 }
+
+
+struct bch_btree_insert_event_t {
+	u64			start_time;
+
+};
+BPF_PERF_OUTPUT(bch_btree_insert_event);
+
+int entry_bch_btree_insert(
+		struct pt_regs *ctx)
+{
+	struct bch_btree_insert_event_t data = {};
+
+	data.start_time = bpf_ktime_get_boot_ns();
+
+	bch_btree_insert_event.perf_submit(ctx, &data, sizeof(data));
+	return 0;
+}
+
+struct journal_try_write_event_t {
+	u64			start_time;
+
+};
+BPF_PERF_OUTPUT(journal_try_write_event);
+
+int entry_journal_try_write(
+		struct pt_regs *ctx)
+{
+	struct journal_try_write_event_t data = {};
+
+	data.start_time = bpf_ktime_get_boot_ns();
+
+	journal_try_write_event.perf_submit(ctx, &data, sizeof(data));
+	return 0;
+}
+
+
+
+
+
+struct journal_write_unlocked_event_t {
+	u64			start_time;
+
+	u64			need_write;
+};
+BPF_PERF_OUTPUT(journal_write_unlocked_event);
+
+int entry_journal_write_unlocked(
+		struct pt_regs *ctx,
+		struct closure *cl)
+{
+	struct journal_write_unlocked_event_t data = {};
+	struct cache_set *c;// = container_of(cl, struct cache_set, journal.io);
+	struct journal_write *w;
+
+
+	void *__mptr = (void *)(cl);
+	c = (struct cache_set *)
+		(__mptr - offsetof(struct cache_set, journal.io));
+	w = c->journal.cur;
+
+
+	data.need_write = w->need_write;
+
+	
+
+
+	data.start_time = bpf_ktime_get_boot_ns();
+	
+
+
+	journal_write_unlocked_event.perf_submit(ctx, &data, sizeof(data));
+	return 0;
+}
