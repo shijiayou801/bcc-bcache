@@ -49,6 +49,8 @@ b.attach_kprobe(event="journal_try_write",
                 fn_name="entry_journal_try_write")
 b.attach_kprobe(event="journal_write_unlocked",
                 fn_name="entry_journal_write_unlocked")
+b.attach_kprobe(event="bch_bio_map",
+                fn_name="entry_bch_bio_map")
 
 
 
@@ -147,13 +149,12 @@ def print___bch_submit_bbio(cpu, data, size):
 def print_submit_bio_noacct(cpu, data, size):
     event = b["submit_bio_noacct_event"].event(data)
 
-    """
     print("submit_bio_noacct")
     print("time ", event.start_time / (1e6))
     print("bi_sector ", event.bi_sector)
     print("bi_size ", event.bi_size)
     print("bio_addr ", hex(event.bio_addr))
-    print("\n")"""
+    print("\n")
 
 
 def print_bch_submit_bbio(cpu, data, size):
@@ -168,6 +169,7 @@ def print_bch_submit_bbio(cpu, data, size):
     print("lba on caching device ", event.lba_on_cache_device)
     print("lba on backing device ", event.lba_on_backing_device)
     print("bucket gen ", event.bucket_gen)
+    print("bio_addr ", hex(event.bio_addr))
     print("\n")
 
 
@@ -234,6 +236,22 @@ def print_journal_write_unlocked(cpu, data, size):
     print("journal_write_unlocked")
     print("time ", event.start_time / (1e6))
     print("need_write ", event.need_write)
+    print("journal_blocks_free ", event.journal_blocks_free)
+    #print("block_bytes ", event.block_bytes)    ### The size of a block in bytes
+    #print("block_size ", event.block_size)      ### The size of a block in sectors
+    print("sectors ", event.sectors)             ### The size of the journal write, jset size + size of the bkeys
+    print("seq ", event.seq)
+    print("journal_bkey_ptrs ", event.journal_bkey_ptrs)
+    print("\n")
+
+def print_bch_bio_map(cpu, data, size):
+    event = b["bch_bio_map_event"].event(data)
+
+    print("bch_bio_map")
+    print("time ", event.start_time / (1e6))
+    print("seq ", event.seq)
+    print("last_seq ", event.last_seq)
+    print("bio_addr ", hex(event.bio_addr))
     print("\n")
 
 
@@ -256,6 +274,9 @@ b["journal_wait_for_write_event"].open_perf_buffer(print_journal_wait_for_write)
 b["bch_btree_insert_event"].open_perf_buffer(print_bch_btree_insert)
 b["journal_try_write_event"].open_perf_buffer(print_journal_try_write)
 b["journal_write_unlocked_event"].open_perf_buffer(print_journal_write_unlocked)
+b["bch_bio_map_event"].open_perf_buffer(print_bch_bio_map)
+
+
 
 # format output
 start = 0

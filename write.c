@@ -399,10 +399,15 @@ int entry_submit_bio_noacct(
 		struct bio *bio)
 {
 	struct submit_bio_noacct_event_t data = {};
+	u64	bio_bpf = REQ_OP_WRITE | 
+			  REQ_SYNC | REQ_META | REQ_PREFLUSH | REQ_FUA;
 
 	if ((bio->bi_opf & REQ_OP_MASK) != REQ_OP_WRITE) {
 		return 0;
 	}
+
+	if (bio->bi_opf != bio_bpf)
+		return 0;
 
 	data.start_time = bpf_ktime_get_boot_ns();
 	data.bi_sector = bio->bi_iter.bi_sector;
@@ -425,6 +430,8 @@ struct bch_submit_bbio_event_t {
 	u64			lba_on_backing_device;
 	u64			lba_on_cache_device;
 	u64			bucket_gen;
+
+	u64			bio_addr;
 };
 BPF_PERF_OUTPUT(bch_submit_bbio_event);
 
@@ -453,6 +460,7 @@ int entry_bch_submit_bbio(
 	data.lba_on_backing_device = k->low;
 	data.lba_on_cache_device = X_PTR_OFFSET(k, 0);
 	data.bucket_gen = X_PTR_GEN(k, 0);
+	data.bio_addr = (u64)bio;
 
 	bch_submit_bbio_event.perf_submit(ctx, &data, sizeof(data));
 	return 0;
@@ -611,14 +619,32 @@ int entry_journal_try_write(
 	return 0;
 }
 
+static u32 x__set_bytes(struct jset *i, u32 k)
+{
+	return (sizeof(*(i)) + (i->keys) * sizeof(uint64_t));
+}
 
+static u32 x_set_blocks(struct jset *i, u32 block_bytes)
+{
+	u32 n = x__set_bytes(i, i->keys);
+	u32 d = block_bytes;
 
-
+	return ((n) + (d) - 1) / (d);
+}
 
 struct journal_write_unlocked_event_t {
 	u64			start_time;
 
 	u64			need_write;
+	u64			journal_blocks_free;
+	u32			block_bytes;
+	u16			block_size;
+	u32			sectors;
+
+	u64			seq;
+	u64			journal_bkey_ptrs;
+
+	u64			bio_addr;
 };
 BPF_PERF_OUTPUT(journal_write_unlocked_event);
 
@@ -627,25 +653,62 @@ int entry_journal_write_unlocked(
 		struct closure *cl)
 {
 	struct journal_write_unlocked_event_t data = {};
-	struct cache_set *c;// = container_of(cl, struct cache_set, journal.io);
+	struct cache_set *c;
+	struct cache *ca;
 	struct journal_write *w;
-
+	struct bkey *k;
+	struct bio *bio;
 
 	void *__mptr = (void *)(cl);
 	c = (struct cache_set *)
 		(__mptr - offsetof(struct cache_set, journal.io));
+	ca = c->cache;
 	w = c->journal.cur;
-
-
-	data.need_write = w->need_write;
-
-	
-
+        k = &c->journal.key;
+	bio = &ca->journal.bio;
 
 	data.start_time = bpf_ktime_get_boot_ns();
-	
+	data.block_size = (ca)->sb.block_size;			// The size of a block in sectors
+	data.block_bytes = data.block_size << 9;		// The size of a block in bytes
+	data.need_write = w->need_write;
+	data.journal_blocks_free = x_set_blocks(w->data, data.block_bytes);
+	data.sectors = x_set_blocks(w->data, data.block_bytes) * data.block_size;
+	data.bio_addr = (u64)bio;
 
+	data.seq = w->data->seq;
+	data.journal_bkey_ptrs = (k->high >> 60) & ~(~0ULL << 3);
 
 	journal_write_unlocked_event.perf_submit(ctx, &data, sizeof(data));
+	return 0;
+}
+
+
+struct bch_bio_map_event_t {
+	u64			start_time;
+
+	u64			seq;
+	u64			last_seq;
+	u64			bio_addr;
+};
+BPF_PERF_OUTPUT(bch_bio_map_event);
+
+int entry_bch_bio_map(
+		struct pt_regs *ctx,
+		struct bio *bio, 
+		void *base)
+{
+	struct bch_bio_map_event_t data = {};
+	struct jset		*d = (struct jset *)base;
+	
+	if (d == NULL)
+		return 0;
+
+	data.start_time = bpf_ktime_get_boot_ns();
+
+	data.seq = d->seq;
+	data.last_seq = d->last_seq;
+	data.bio_addr = (u64)bio;
+
+	bch_bio_map_event.perf_submit(ctx, &data, sizeof(data));
 	return 0;
 }
