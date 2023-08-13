@@ -101,7 +101,7 @@ def print_bch_alloc_sectors(cpu, data, size):
     print("wait ", event.wait)
     print("bkey_inode ", event.bkey_inode)
     print("bucket_size %dKB" % (event.bucket_size * 512.0 / 1024))
-    print("nr_buckets ", event.nr_buckets)
+    print("nr_data_buckets ", event.nr_data_buckets)
     print("\n")
 
 def print_cached_dev_submit_bio(cpu, data, size):
@@ -168,6 +168,12 @@ def print_bch_submit_bbio(cpu, data, size):
     print("lba on caching device ", event.lba_on_cache_device)
     print("lba on backing device ", event.lba_on_backing_device)
     print("bucket gen ", event.bucket_gen)
+    print("sb_nbuckets ", event.sb_nbuckets)
+    print("sb_nr_in_set ", event.sb_nr_in_set)
+    print("sb_nr_this_dev ", event.sb_nr_this_dev)
+    print("sb_first_bucket ", event.sb_first_bucket)
+    print("sb_keys ", event.sb_keys)
+    print("initial_free ", event.initial_free)
     print("\n")
 
 

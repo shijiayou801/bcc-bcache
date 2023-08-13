@@ -114,6 +114,7 @@ int entry_cached_dev_write(
 	data.start_time = bpf_ktime_get_boot_ns();
 	data.has_dirty = dc->has_dirty.counter;
 
+
 	cached_dev_write_event.perf_submit(ctx, &data, sizeof(data));
 	return 0;
 }
@@ -190,7 +191,7 @@ struct bch_alloc_sectors_event_t {
 
 	u16			bucket_size;
 
-	u8			nr_buckets;
+	u8			nr_data_buckets;
 
 	u64			bkey_ptrs;
 
@@ -227,7 +228,7 @@ int entry_bch_alloc_sectors(
 	data.write_point = write_point;
 	data.write_prio = write_prio;
 	data.wait = wait;
-	data.nr_buckets = 0;
+	data.nr_data_buckets = 0;
 
 	// TODO
 	data.bkey_inode = 
@@ -239,7 +240,7 @@ int entry_bch_alloc_sectors(
 	b = last_entry(&c->data_buckets);
 
 	for (int i = 0; i < 128; ++i) {
-		++data.nr_buckets;
+		++data.nr_data_buckets;
 	     	b = prev_entry(b);
 		if (entry_is_head(&c->data_buckets, b)) {
 			break;
@@ -425,6 +426,15 @@ struct bch_submit_bbio_event_t {
 	u64			lba_on_backing_device;
 	u64			lba_on_cache_device;
 	u64			bucket_gen;
+
+
+	u64			sb_nbuckets;
+	u16			sb_nr_in_set;
+	u16			sb_nr_this_dev;
+	u16			sb_first_bucket;
+	u16			sb_keys;
+
+	unsigned long		initial_free;
 };
 BPF_PERF_OUTPUT(bch_submit_bbio_event);
 
@@ -453,6 +463,13 @@ int entry_bch_submit_bbio(
 	data.lba_on_backing_device = k->low;
 	data.lba_on_cache_device = X_PTR_OFFSET(k, 0);
 	data.bucket_gen = X_PTR_GEN(k, 0);
+
+	data.sb_nbuckets = c->cache->sb.nbuckets;
+	data.sb_nr_in_set = c->cache->sb.nr_in_set;
+	data.sb_nr_this_dev = c->cache->sb.nr_this_dev;
+	data.sb_first_bucket = c->cache->sb.first_bucket;
+	data.sb_keys = c->cache->sb.keys;
+	data.initial_free = roundup_pow_of_two(20480) >> 10;
 
 	bch_submit_bbio_event.perf_submit(ctx, &data, sizeof(data));
 	return 0;
@@ -638,13 +655,7 @@ int entry_journal_write_unlocked(
 
 
 	data.need_write = w->need_write;
-
-	
-
-
 	data.start_time = bpf_ktime_get_boot_ns();
-	
-
 
 	journal_write_unlocked_event.perf_submit(ctx, &data, sizeof(data));
 	return 0;
